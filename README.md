@@ -1,36 +1,70 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Footwear Store
 
-## Getting Started
+A Next.js (App Router, TypeScript, Tailwind) footwear storefront with a server-secured `/admin` dashboard.
 
-First, run the development server:
+- **Auth:** Firebase Authentication. The server verifies an `httpOnly` session cookie on every privileged request.
+- **Data:** Cloud Firestore (products, categories, users, carts, orders, settings, editable pages).
+- **Images:** Cloudinary. The browser uploads directly with a short-lived signature minted by the server; the API secret never reaches the client.
+- **Notifications:** Telegram Bot API, sent from server code only, at most once per order event, never blocking checkout.
+- **Hosting:** Vercel.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## Security model
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+| Concern | How it is enforced |
+| --- | --- |
+| Admin access | `admin: true` Firebase **custom claim**, settable only with the Admin SDK (`npm run set-admin`). Checked server-side in every `/api/admin/*` handler and every `/admin` page. Visiting `/admin` or signing in grants nothing. |
+| Customer data | All reads/writes of carts, orders and profiles run in route handlers that check the session UID. `firestore.rules` additionally denies all client writes and limits client reads to the owner. |
+| Prices and stock | Re-read from Firestore inside a transaction at order time. Client-supplied prices are ignored. Stock is decremented in the same transaction, so concurrent buyers cannot oversell. |
+| Duplicate submits | Order ID is derived from (user, idempotency key); a repeated submit returns the same order. |
+| Payments | Cash on delivery only. An order is never marked paid automatically; the admin records payment, and payment status is tracked separately from fulfilment status. No online gateway is wired up. |
+| Telegram | Token and chat ID are server-only env vars. Failures are retried and logged without the token and never fail checkout. Duplicate events are suppressed. |
+| CSRF | `SameSite=Lax` cookie plus an Origin check on mutations. |
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Setup
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. **Firebase**
+   - Create a project; enable **Authentication → Email/Password** and **Firestore**.
+   - Add a Web app and copy its config into the `NEXT_PUBLIC_FIREBASE_*` variables.
+   - Generate a service-account key and set `FIREBASE_SERVICE_ACCOUNT_JSON` (raw or base64 JSON).
+   - Deploy the rules and index: `npx firebase-tools deploy --only firestore`.
+2. **Cloudinary:** set `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` and `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME`.
+3. **Telegram (optional):** create a bot with @BotFather, add it to your group, and set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Use the test button in the admin dashboard to verify; the response never includes the token.
+4. Copy `.env.example` to `.env.local` and fill it in.
+5. `npm install && npm run dev`.
+6. **Create the first administrator:** sign up as a normal customer at `/signup`, then run
+   `FIREBASE_SERVICE_ACCOUNT_JSON=... npm run set-admin -- owner@example.com`
+   and sign in again at `/admin/login`.
+7. In `/admin`, create categories, add products with images, then fill in store settings (business name, contact details, shipping, enable COD). **Checkout stays disabled until COD is enabled.**
+8. Edit `/privacy-policy`, `/terms-and-conditions` and `/contact` in the admin and resolve every `CONFIRM` marker with real business details before launch.
 
-## Learn More
+## Scripts
 
-To learn more about Next.js, take a look at the following resources:
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Development server |
+| `npm run build` / `npm start` | Production build / server |
+| `npm run lint` | ESLint |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm test` | Unit tests for pricing and order-status rules |
+| `npm run set-admin -- <email> [--revoke]` | Grant or revoke the admin claim |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Deploying to Vercel with a custom domain
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1. Push to GitHub and import the repo in Vercel.
+2. Add every variable from `.env.example` for the Production environment (set `NEXT_PUBLIC_SITE_URL` to the final `https://` domain, because it feeds the canonical URLs, sitemap and robots.txt).
+3. Project → Settings → Domains → add the domain and create the DNS records Vercel shows. HTTPS is issued automatically.
+4. In Firebase Authentication → Settings → Authorized domains, add the custom domain.
 
-## Deploy on Vercel
+## Pre-launch checklist
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Tick these only after verifying them against the real deployment:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [ ] Custom domain resolves over HTTPS; `NEXT_PUBLIC_SITE_URL` matches it
+- [ ] Firestore rules and index deployed
+- [ ] First admin created; a non-admin account gets 403/redirect on `/admin`
+- [ ] Multi-image upload, reorder, primary image and removal work in `/admin`
+- [ ] A test order decrements stock; cancelling it restores stock
+- [ ] Telegram test message arrives; a new order notification arrives once
+- [ ] Legal pages contain no remaining `CONFIRM` markers
+- [ ] Favicon shows in the browser tab
+- [ ] Mobile layouts checked on a real phone

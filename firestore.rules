@@ -1,0 +1,58 @@
+rules_version = '2';
+
+// Default posture: deny everything.
+//
+// Every privileged or private operation in this app (orders, carts, user profiles, settings,
+// product writes, stock changes) goes through server route handlers using the Firebase Admin SDK,
+// which bypasses these rules and enforces authorisation itself (session cookie + `admin` custom claim).
+// The browser therefore never needs direct Firestore access to private data, and these rules
+// guarantee that a customer cannot read or write it even with a valid ID token.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Public catalogue: only published products are readable. No client writes.
+    match /products/{productId} {
+      allow read: if resource.data.status == 'published';
+      allow write: if false;
+    }
+
+    // Public categories only.
+    match /categories/{categoryId} {
+      allow read: if resource.data.isPublic == true;
+      allow write: if false;
+    }
+
+    // Editable legal/content pages are public to read, never writable from the client.
+    match /pages/{slug} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Customer-private data: a signed-in customer may read only their own documents.
+    // Writes are server-only so totals, stock and roles can never be client-controlled.
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    match /carts/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    match /orders/{orderId} {
+      allow read: if request.auth != null && resource.data.userId == request.auth.uid;
+      allow write: if false;
+    }
+
+    // Store settings (shipping, COD flag, contact details) are read and written server-side only.
+    match /settings/{doc} {
+      allow read, write: if false;
+    }
+
+    // Anything not matched above is denied.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
